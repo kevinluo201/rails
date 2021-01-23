@@ -663,10 +663,10 @@ class EagerAssociationTest < ActiveRecord::TestCase
   end
 
   def test_eager_with_has_many_and_limit_and_conditions_array_on_the_eagers
-    posts = Post.includes(:author, :comments).limit(2).references(:author).where("authors.name = ?", "David")
+    posts = Post.includes(:author, :comments).limit(2).references("author").where("authors.name = ?", "David")
     assert_equal 2, posts.size
 
-    count = Post.includes(:author, :comments).limit(2).references(:author).where("authors.name = ?", "David").count
+    count = Post.includes(:author, :comments).limit(2).references("author").where("authors.name = ?", "David").count
     assert_equal posts.size, count
   end
 
@@ -1022,7 +1022,7 @@ class EagerAssociationTest < ActiveRecord::TestCase
           d3 = find_all_ordered(className, [:posts, post_type])
           assert_equal(d1[i], d3[i])
           assert_equal_after_sort(d1[i].posts, d3[i].posts)
-          assert_equal_after_sort(d1[i].send(post_type), d2[i].send(post_type), d3[i].send(post_type))
+          assert_equal_after_sort(d1[i].public_send(post_type), d2[i].public_send(post_type), d3[i].public_send(post_type))
         end
       end
     end
@@ -1048,10 +1048,10 @@ class EagerAssociationTest < ActiveRecord::TestCase
     d1.each_index do |i|
       assert_equal(d1[i], d2[i])
       firm_types.each do |type|
-        if (expected = d1[i].send(type)).nil?
-          assert_nil(d2[i].send(type))
+        if (expected = d1[i].public_send(type)).nil?
+          assert_nil(d2[i].public_send(type))
         else
-          assert_equal(expected, d2[i].send(type))
+          assert_equal(expected, d2[i].public_send(type))
         end
       end
     end
@@ -1530,10 +1530,10 @@ class EagerAssociationTest < ActiveRecord::TestCase
   end
 
   test "preload with invalid argument" do
-    exception = assert_raises(ArgumentError) do
+    exception = assert_raises(ActiveRecord::AssociationNotFoundError) do
       Author.preload(10).to_a
     end
-    assert_equal("10 was not recognized for preload", exception.message)
+    assert_match(/Association named '10' was not found on Author; perhaps you misspelled it\?/, exception.message)
   end
 
   test "associations with extensions are not instance dependent" do

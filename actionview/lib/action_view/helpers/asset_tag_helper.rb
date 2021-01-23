@@ -18,10 +18,12 @@ module ActionView
     #   stylesheet_link_tag("application")
     #   # => <link href="/assets/application.css?body=1" media="screen" rel="stylesheet" />
     module AssetTagHelper
-      extend ActiveSupport::Concern
-
       include AssetUrlHelper
       include TagHelper
+
+      mattr_accessor :image_loading
+      mattr_accessor :image_decoding
+      mattr_accessor :preload_links_header
 
       # Returns an HTML script tag for each of the +sources+ provided.
       #
@@ -88,16 +90,22 @@ module ActionView
         path_options = options.extract!("protocol", "extname", "host", "skip_pipeline").symbolize_keys
         preload_links = []
         nopush = options["nopush"].nil? ? true : options.delete("nopush")
+        crossorigin = options.delete("crossorigin")
+        crossorigin = "anonymous" if crossorigin == true
+        integrity = options["integrity"]
 
         sources_tags = sources.uniq.map { |source|
           href = path_to_javascript(source, path_options)
-          unless options["defer"]
+          if preload_links_header && !options["defer"]
             preload_link = "<#{href}>; rel=preload; as=script"
+            preload_link += "; crossorigin=#{crossorigin}" unless crossorigin.nil?
+            preload_link += "; integrity=#{integrity}" unless integrity.nil?
             preload_link += "; nopush" if nopush
             preload_links << preload_link
           end
           tag_options = {
-            "src" => href
+            "src" => href,
+            "crossorigin" => crossorigin
           }.merge!(options)
           if tag_options["nonce"] == true
             tag_options["nonce"] = content_security_policy_nonce
@@ -105,7 +113,9 @@ module ActionView
           content_tag("script", "", tag_options)
         }.join("\n").html_safe
 
-        send_preload_links_header(preload_links)
+        if preload_links_header
+          send_preload_links_header(preload_links)
+        end
 
         sources_tags
       end
@@ -142,22 +152,32 @@ module ActionView
         options = sources.extract_options!.stringify_keys
         path_options = options.extract!("protocol", "host", "skip_pipeline").symbolize_keys
         preload_links = []
+        crossorigin = options.delete("crossorigin")
+        crossorigin = "anonymous" if crossorigin == true
         nopush = options["nopush"].nil? ? true : options.delete("nopush")
+        integrity = options["integrity"]
 
         sources_tags = sources.uniq.map { |source|
           href = path_to_stylesheet(source, path_options)
-          preload_link = "<#{href}>; rel=preload; as=style"
-          preload_link += "; nopush" if nopush
-          preload_links << preload_link
+          if preload_links_header
+            preload_link = "<#{href}>; rel=preload; as=style"
+            preload_link += "; crossorigin=#{crossorigin}" unless crossorigin.nil?
+            preload_link += "; integrity=#{integrity}" unless integrity.nil?
+            preload_link += "; nopush" if nopush
+            preload_links << preload_link
+          end
           tag_options = {
             "rel" => "stylesheet",
             "media" => "screen",
+            "crossorigin" => crossorigin,
             "href" => href
           }.merge!(options)
           tag(:link, tag_options)
         }.join("\n").html_safe
 
-        send_preload_links_header(preload_links)
+        if preload_links_header
+          send_preload_links_header(preload_links)
+        end
 
         sources_tags
       end
@@ -248,6 +268,7 @@ module ActionView
       # * <tt>:as</tt>  - Override the auto-generated value for as attribute, calculated using +source+ extension and mime type.
       # * <tt>:crossorigin</tt>  - Specify the crossorigin attribute, required to load cross-origin resources.
       # * <tt>:nopush</tt>  - Specify if the use of server push is not desired for the resource. Defaults to +false+.
+      # * <tt>:integrity</tt> - Specify the integrity attribute.
       #
       # ==== Examples
       #
@@ -279,6 +300,7 @@ module ActionView
         as_type = options.delete(:as) || resolve_link_as(extname, mime_type)
         crossorigin = options.delete(:crossorigin)
         crossorigin = "anonymous" if crossorigin == true || (crossorigin.blank? && as_type == "font")
+        integrity = options[:integrity]
         nopush = options.delete(:nopush) || false
 
         link_tag = tag.link(**{
@@ -292,6 +314,7 @@ module ActionView
         preload_link = "<#{href}>; rel=preload; as=#{as_type}"
         preload_link += "; type=#{mime_type}" if mime_type
         preload_link += "; crossorigin=#{crossorigin}" if crossorigin
+        preload_link += "; integrity=#{integrity}" if integrity
         preload_link += "; nopush" if nopush
 
         send_preload_links_header([preload_link])
@@ -359,6 +382,10 @@ module ActionView
         end
 
         options[:width], options[:height] = extract_dimensions(options.delete(:size)) if options[:size]
+
+        options[:loading] ||= image_loading if image_loading
+        options[:decoding] ||= image_decoding if image_decoding
+
         tag("img", options)
       end
 

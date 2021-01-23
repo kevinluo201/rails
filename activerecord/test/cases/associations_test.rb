@@ -185,6 +185,7 @@ class AssociationProxyTest < ActiveRecord::TestCase
     andreas = Developer.new name: "Andreas", log: "new developer added"
     assert_not_predicate andreas.audit_logs, :loaded?
     assert_match(/message: "new developer added"/, andreas.audit_logs.inspect)
+    assert_predicate andreas.audit_logs, :loaded?
   end
 
   def test_save_on_parent_saves_children
@@ -360,11 +361,42 @@ class PreloaderTest < ActiveRecord::TestCase
   def test_preload_with_scope
     post = posts(:welcome)
 
-    preloader = ActiveRecord::Associations::Preloader.new
-    preloader.preload([post], :comments, Comment.where(body: "Thank you for the welcome"))
+    preloader = ActiveRecord::Associations::Preloader.new(records: [post], associations: :comments, scope: Comment.where(body: "Thank you for the welcome"))
+    preloader.call
 
     assert_predicate post.comments, :loaded?
     assert_equal [comments(:greetings)], post.comments
+  end
+
+  def test_legacy_preload_with_scope
+    post = posts(:welcome)
+
+    assert_deprecated do
+      preloader = ActiveRecord::Associations::Preloader.new
+      preloader.preload([post], :comments, Comment.where(body: "Thank you for the welcome"))
+    end
+
+    assert_predicate post.comments, :loaded?
+    assert_equal [comments(:greetings)], post.comments
+  end
+
+  def test_preload_makes_correct_number_of_queries_on_array
+    post = posts(:welcome)
+
+    assert_queries(1) do
+      preloader = ActiveRecord::Associations::Preloader.new(records: [post], associations: :comments)
+      preloader.call
+    end
+  end
+
+  def test_preload_makes_correct_number_of_queries_on_relation
+    post = posts(:welcome)
+    relation = Post.where(id: post.id)
+
+    assert_queries(2) do
+      preloader = ActiveRecord::Associations::Preloader.new(records: relation, associations: :comments)
+      preloader.call
+    end
   end
 end
 

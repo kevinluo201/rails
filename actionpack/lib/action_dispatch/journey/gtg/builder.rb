@@ -6,20 +6,20 @@ module ActionDispatch
   module Journey # :nodoc:
     module GTG # :nodoc:
       class Builder # :nodoc:
-        DUMMY = Nodes::Dummy.new
+        DUMMY_END_NODE = Nodes::Dummy.new
 
         attr_reader :root, :ast, :endpoints
 
         def initialize(root)
           @root      = root
-          @ast       = Nodes::Cat.new root, DUMMY
+          @ast       = Nodes::Cat.new root, DUMMY_END_NODE
           @followpos = build_followpos
         end
 
         def transition_table
           dtrans   = TransitionTable.new
-          marked   = {}
-          state_id = Hash.new { |h, k| h[k] = h.length }
+          marked   = {}.compare_by_identity
+          state_id = Hash.new { |h, k| h[k] = h.length }.compare_by_identity
           dstates  = [firstpos(root)]
 
           until dstates.empty?
@@ -28,13 +28,13 @@ module ActionDispatch
             marked[s] = true # mark s
 
             s.group_by { |state| symbol(state) }.each do |sym, ps|
-              u = ps.flat_map { |l| @followpos[l] }
+              u = ps.flat_map { |l| @followpos[l] }.uniq
               next if u.empty?
 
               from = state_id[s]
 
-              if u.all? { |pos| pos == DUMMY }
-                to   = state_id[Object.new]
+              if u.all? { |pos| pos == DUMMY_END_NODE }
+                to = state_id[Object.new]
                 dtrans[from, to] = sym
                 dtrans.add_accepting(to)
 
@@ -43,9 +43,9 @@ module ActionDispatch
                 to = state_id[u]
                 dtrans[from, to] = sym
 
-                if u.include?(DUMMY)
+                if u.include?(DUMMY_END_NODE)
                   ps.each do |state|
-                    if @followpos[state].include?(DUMMY)
+                    if @followpos[state].include?(DUMMY_END_NODE)
                       dtrans.add_memo(to, state.memo)
                     end
                   end
@@ -66,7 +66,10 @@ module ActionDispatch
           when Nodes::Group
             true
           when Nodes::Star
-            true
+            # the default star regex is /(.+)/ which is NOT nullable
+            # but since different constraints can be provided we must
+            # actually check if this is the case or not.
+            node.regexp.match?("")
           when Nodes::Or
             node.children.any? { |c| nullable?(c) }
           when Nodes::Cat
@@ -104,7 +107,7 @@ module ActionDispatch
         def lastpos(node)
           case node
           when Nodes::Star
-            firstpos(node.left)
+            lastpos(node.left)
           when Nodes::Or
             node.children.flat_map { |c| lastpos(c) }.tap(&:uniq!)
           when Nodes::Cat
@@ -124,16 +127,12 @@ module ActionDispatch
 
         private
           def build_followpos
-            table = Hash.new { |h, k| h[k] = [] }
+            table = Hash.new { |h, k| h[k] = [] }.compare_by_identity
             @ast.each do |n|
               case n
               when Nodes::Cat
                 lastpos(n.left).each do |i|
                   table[i] += firstpos(n.right)
-                end
-              when Nodes::Star
-                lastpos(n).each do |i|
-                  table[i] += firstpos(n)
                 end
               end
             end

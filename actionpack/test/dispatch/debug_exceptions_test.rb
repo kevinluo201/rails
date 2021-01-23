@@ -88,7 +88,7 @@ class DebugExceptionsTest < ActionDispatch::IntegrationTest
       when "/unprocessable_entity"
         raise ActionController::InvalidAuthenticityToken
       when "/invalid_mimetype"
-        raise Mime::Type::InvalidMimeType
+        raise ActionDispatch::Http::MimeNegotiation::InvalidType
       when "/not_found_original_exception"
         begin
           raise AbstractController::ActionNotFound.new
@@ -230,7 +230,7 @@ class DebugExceptionsTest < ActionDispatch::IntegrationTest
     get "/invalid_mimetype", headers: { "Accept" => "text/html,*", "action_dispatch.show_exceptions" => true }
     assert_response 406
     assert_match(/<body>/, body)
-    assert_match(/Mime::Type::InvalidMimeType/, body)
+    assert_match(/ActionDispatch::Http::MimeNegotiation::InvalidType/, body)
   end
 
   test "rescue with text error for xhr request" do
@@ -327,7 +327,7 @@ class DebugExceptionsTest < ActionDispatch::IntegrationTest
     assert_response 406
     assert_no_match(/<body>/, body)
     assert_equal "application/json", response.media_type
-    assert_match(/Mime::Type::InvalidMimeType/, body)
+    assert_match(/ActionDispatch::Http::MimeNegotiation::InvalidType/, body)
   end
 
   if defined?(DidYouMean) && DidYouMean.respond_to?(:correct_error)
@@ -540,9 +540,7 @@ class DebugExceptionsTest < ActionDispatch::IntegrationTest
 
     output = StringIO.new
     backtrace_cleaner = ActiveSupport::BacktraceCleaner.new
-    def backtrace_cleaner.clean(bt, _)
-      []
-    end
+    backtrace_cleaner.add_silencer { true }
 
     env = { "action_dispatch.show_exceptions"   => true,
             "action_dispatch.logger"            => Logger.new(output),
@@ -555,6 +553,28 @@ class DebugExceptionsTest < ActionDispatch::IntegrationTest
     log = output.rewind && output.read
 
     assert_includes log, "ActionController::RoutingError (No route matches [GET] \"/pass\")"
+    assert_equal 3, log.lines.count
+  end
+
+  test "doesn't log the framework backtrace when error type is a invalid mine type" do
+    @app = ProductionApp
+
+    output = StringIO.new
+    backtrace_cleaner = ActiveSupport::BacktraceCleaner.new
+    backtrace_cleaner.add_silencer { true }
+
+    env = { "Accept" => "text/html,*",
+            "action_dispatch.show_exceptions"   => true,
+            "action_dispatch.logger"            => Logger.new(output),
+            "action_dispatch.backtrace_cleaner" => backtrace_cleaner }
+
+    assert_raises ActionDispatch::Http::MimeNegotiation::InvalidType do
+      get "/invalid_mimetype", headers: env
+    end
+
+    log = output.rewind && output.read
+
+    assert_includes log, "ActionDispatch::Http::MimeNegotiation::InvalidType (ActionDispatch::Http::MimeNegotiation::InvalidType)"
     assert_equal 3, log.lines.count
   end
 
@@ -609,7 +629,9 @@ class DebugExceptionsTest < ActionDispatch::IntegrationTest
 
       # Assert correct error
       assert_response 500
-      assert_select "h2", /error in framework/
+      assert_select "div.exception-message" do
+        assert_select "div", /error in framework/
+      end
 
       # assert source view line is the call to method_that_raises
       assert_select "div.source:not(.hidden)" do
@@ -617,7 +639,7 @@ class DebugExceptionsTest < ActionDispatch::IntegrationTest
       end
 
       # assert first source view (hidden) that throws the error
-      assert_select "div.source:first" do
+      assert_select "div.source" do
         assert_select "pre .line.active", /raise StandardError\.new/
       end
 
@@ -660,7 +682,9 @@ class DebugExceptionsTest < ActionDispatch::IntegrationTest
 
       # Assert correct error
       assert_response 500
-      assert_select "h2", /Third error/
+      assert_select "div.exception-message" do
+        assert_select "div", /Third error/
+      end
 
       # assert source view line shows the last error
       assert_select "div.source:not(.hidden)" do
@@ -729,7 +753,9 @@ class DebugExceptionsTest < ActionDispatch::IntegrationTest
     get "/nil_annoted_source_code_error", headers: { "action_dispatch.show_exceptions" => true, "action_dispatch.logger" => logger }
 
     assert_select "header h1", /DebugExceptionsTest::Boomer::NilAnnotedSourceCodeError/
-    assert_select "#container h2", /nil annoted_source_code/
+    assert_select "#container div.exception-message" do
+      assert_select "div", /nil annoted_source_code/
+    end
   end
 
   test "debug exceptions app shows diagnostics for template errors that contain UTF-8 characters" do

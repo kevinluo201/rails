@@ -104,6 +104,32 @@ module ActiveRecord
       take || raise_record_not_found_exception!
     end
 
+    # Finds the sole matching record. Raises ActiveRecord::RecordNotFound if no
+    # record is found. Raises ActiveRecord::SoleRecordExceeded if more than one
+    # record is found.
+    #
+    #   Product.where(["price = %?", price]).sole
+    def sole
+      found, undesired = first(2)
+
+      if found.nil?
+        raise_record_not_found_exception!
+      elsif undesired.present?
+        raise ActiveRecord::SoleRecordExceeded.new(self)
+      else
+        found
+      end
+    end
+
+    # Finds the sole matching record. Raises ActiveRecord::RecordNotFound if no
+    # record is found. Raises ActiveRecord::SoleRecordExceeded if more than one
+    # record is found.
+    #
+    #   Product.find_sole_by(["price = %?", price])
+    def find_sole_by(arg, *args)
+      where(arg, *args).sole
+    end
+
     # Find the first record (or first N records if a parameter is supplied).
     # If no order is defined it will order by primary key.
     #
@@ -315,9 +341,25 @@ module ActiveRecord
       end
 
       relation = construct_relation_for_exists(conditions)
+      return false if relation.where_clause.contradiction?
 
       skip_query_cache_if_necessary { connection.select_rows(relation.arel, "#{name} Exists?").size == 1 }
     end
+
+    # Returns true if the relation contains the given record or false otherwise.
+    #
+    # No query is performed if the relation is loaded; the given record is
+    # compared to the records in memory. If the relation is unloaded, an
+    # efficient existence query is performed, as in #exists?.
+    def include?(record)
+      if loaded? || offset_value || limit_value
+        records.include?(record)
+      else
+        record.is_a?(klass) && exists?(record.id)
+      end
+    end
+
+    alias :member? :include?
 
     # This method is called whenever no records are found with either a single
     # id or multiple ids and raises an ActiveRecord::RecordNotFound exception.
@@ -336,7 +378,7 @@ module ActiveRecord
         error = +"Couldn't find #{name}"
         error << " with#{conditions}" if conditions
         raise RecordNotFound.new(error, name, key)
-      elsif Array(ids).size == 1
+      elsif Array.wrap(ids).size == 1
         error = "Couldn't find #{name} with '#{key}'=#{ids}#{conditions}"
         raise RecordNotFound.new(error, name, key, ids)
       else
@@ -384,7 +426,7 @@ module ActiveRecord
         )
         relation = except(:includes, :eager_load, :preload).joins!(join_dependency)
 
-        if eager_loading && !(
+        if eager_loading && has_limit_or_offset? && !(
             using_limitable_reflections?(join_dependency.reflections) &&
             using_limitable_reflections?(
               construct_join_dependency(
@@ -394,11 +436,9 @@ module ActiveRecord
               ).reflections
             )
         )
-          if has_limit_or_offset?
-            limited_ids = limited_ids_for(relation)
-            limited_ids.empty? ? relation.none! : relation.where!(primary_key => limited_ids)
+          relation = skip_query_cache_if_necessary do
+            klass.connection.distinct_relation_for_primary_key(relation)
           end
-          relation.limit_value = relation.offset_value = nil
         end
 
         if block_given?
@@ -406,18 +446,6 @@ module ActiveRecord
         else
           relation
         end
-      end
-
-      def limited_ids_for(relation)
-        values = @klass.connection.columns_for_distinct(
-          connection.visitor.compile(table[primary_key]),
-          relation.order_values
-        )
-
-        relation = relation.except(:select).select(values).distinct!
-
-        id_rows = skip_query_cache_if_necessary { @klass.connection.select_rows(relation.arel, "SQL") }
-        id_rows.map(&:last)
       end
 
       def using_limitable_reflections?(reflections)

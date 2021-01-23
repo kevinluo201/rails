@@ -32,9 +32,9 @@ module ActiveRecord
     def self.references(attributes)
       attributes.each_with_object([]) do |(key, value), result|
         if value.is_a?(Hash)
-          result << key
+          result << Arel.sql(key)
         elsif key.include?(".")
-          result << key.split(".").first
+          result << Arel.sql(key.split(".").first)
         end
       end
     end
@@ -59,7 +59,7 @@ module ActiveRecord
     end
 
     def build(attribute, value, operator = nil)
-      value = value.id if value.is_a?(Base)
+      value = value.id if value.respond_to?(:id)
       if operator ||= table.type(attribute.name).force_equality?(value) && :eq
         bind = build_bind_attribute(attribute.name, value)
         attribute.public_send(operator, bind)
@@ -93,14 +93,11 @@ module ActiveRecord
             # PriceEstimate.where(estimate_of: treasure)
             associated_table = table.associated_table(key)
             if associated_table.polymorphic_association?
-              case value.is_a?(Array) ? value.first : value
-              when Base, Relation
-                value = [value] unless value.is_a?(Array)
-                klass = PolymorphicArrayValue
-              end
+              value = [value] unless value.is_a?(Array)
+              klass = PolymorphicArrayValue
             elsif associated_table.through_association?
               next associated_table.predicate_builder.expand_from_hash(
-                associated_table.join_foreign_key => value
+                associated_table.primary_key => value
               )
             end
 

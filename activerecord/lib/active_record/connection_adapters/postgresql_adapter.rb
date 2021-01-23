@@ -345,11 +345,6 @@ module ActiveRecord
         true
       end
 
-      def supports_ranges?
-        true
-      end
-      deprecate :supports_ranges?
-
       def supports_materialized_views?
         true
       end
@@ -561,11 +556,6 @@ module ActiveRecord
           m.register_type "polygon", OID::SpecializedString.new(:polygon)
           m.register_type "circle", OID::SpecializedString.new(:circle)
 
-          m.register_type "interval" do |_, _, sql_type|
-            precision = extract_precision(sql_type)
-            OID::SpecializedString.new(:interval, precision: precision)
-          end
-
           register_class_with_precision m, "time", Type::Time
           register_class_with_precision m, "timestamp", OID::DateTime
 
@@ -589,6 +579,11 @@ module ActiveRecord
             end
           end
 
+          m.register_type "interval" do |*args, sql_type|
+            precision = extract_precision(sql_type)
+            OID::Interval.new(precision: precision)
+          end
+
           load_additional_types
         end
 
@@ -596,7 +591,7 @@ module ActiveRecord
         def extract_value_from_default(default)
           case default
             # Quoted types
-          when /\A[\(B]?'(.*)'.*::"?([\w. ]+)"?(?:\[\])?\z/m
+          when /\A[(B]?'(.*)'.*::"?([\w. ]+)"?(?:\[\])?\z/m
             # The default 'now'::date is CURRENT_DATE
             if $1 == "now" && $2 == "date"
               nil
@@ -629,21 +624,25 @@ module ActiveRecord
 
         def load_additional_types(oids = nil)
           initializer = OID::TypeMapInitializer.new(type_map)
+          load_types_queries(initializer, oids) do |query|
+            execute_and_clear(query, "SCHEMA", []) do |records|
+              initializer.run(records)
+            end
+          end
+        end
 
+        def load_types_queries(initializer, oids)
           query = <<~SQL
             SELECT t.oid, t.typname, t.typelem, t.typdelim, t.typinput, r.rngsubtype, t.typtype, t.typbasetype
             FROM pg_type as t
             LEFT JOIN pg_range as r ON oid = rngtypid
           SQL
-
           if oids
-            query += "WHERE t.oid IN (%s)" % oids.join(", ")
+            yield query + "WHERE t.oid IN (%s)" % oids.join(", ")
           else
-            query += initializer.query_conditions_for_initial_load
-          end
-
-          execute_and_clear(query, "SCHEMA", []) do |records|
-            initializer.run(records)
+            yield query + initializer.query_conditions_for_known_type_names
+            yield query + initializer.query_conditions_for_known_type_types
+            yield query + initializer.query_conditions_for_array_types
           end
         end
 
@@ -793,6 +792,9 @@ module ActiveRecord
               variables["timezone"] = @local_tz
             end
           end
+
+          # Set interval output format to ISO 8601 for ease of parsing by ActiveSupport::Duration.parse
+          execute("SET intervalstyle = iso_8601", "SCHEMA")
 
           # SET statements from :variables config hash
           # https://www.postgresql.org/docs/current/static/sql-set.html
@@ -962,6 +964,7 @@ module ActiveRecord
         ActiveRecord::Type.register(:enum, OID::Enum, adapter: :postgresql)
         ActiveRecord::Type.register(:hstore, OID::Hstore, adapter: :postgresql)
         ActiveRecord::Type.register(:inet, OID::Inet, adapter: :postgresql)
+        ActiveRecord::Type.register(:interval, OID::Interval, adapter: :postgresql)
         ActiveRecord::Type.register(:jsonb, OID::Jsonb, adapter: :postgresql)
         ActiveRecord::Type.register(:money, OID::Money, adapter: :postgresql)
         ActiveRecord::Type.register(:point, OID::Point, adapter: :postgresql)

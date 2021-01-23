@@ -348,7 +348,7 @@ module ApplicationTests
           args = ["generate", "model", "book", "title:string"]
           rails args
           rails "db:migrate", "db:schema:dump"
-          assert_match(/create_table \"books\"/, File.read("db/schema.rb"))
+          assert_match(/create_table "books"/, File.read("db/schema.rb"))
         end
       end
 
@@ -476,7 +476,7 @@ module ApplicationTests
           rails "generate", "model", "book", "title:string"
           rails "db:migrate", "db:structure:dump"
           structure_dump = File.read("db/structure.sql")
-          assert_match(/CREATE TABLE (?:IF NOT EXISTS )?\"books\"/, structure_dump)
+          assert_match(/CREATE TABLE (?:IF NOT EXISTS )?"books"/, structure_dump)
           rails "environment", "db:drop", "db:structure:load"
           assert_match expected_database, ActiveRecord::Base.connection_db_config.database
           require "#{app_path}/app/models/book"
@@ -525,7 +525,7 @@ module ApplicationTests
         stderr_output = capture(:stderr) { rails("db:structure:dump", stderr: true, allow_failure: true) }
         assert_empty stderr_output
         structure_dump = File.read("#{app_path}/db/structure.sql")
-        assert_match(/CREATE TABLE (?:IF NOT EXISTS )?\"posts\"/, structure_dump)
+        assert_match(/CREATE TABLE (?:IF NOT EXISTS )?"posts"/, structure_dump)
       end
 
       test "db:schema:load and db:structure:load do not purge the existing database" do
@@ -753,6 +753,20 @@ module ApplicationTests
           assert_match(/CreateBooks: migrated/, output)
           assert_match(/CreateRecipes: migrated/, output)
         end
+      end
+
+      test "db:prepare setup the database even if schema does not exist" do
+        Dir.chdir(app_path) do
+          use_postgresql(multi_db: true) # bug doesn't exist with sqlite3
+          output = rails("db:drop")
+          assert_match(/Dropped database/, output)
+
+          rails "generate", "model", "recipe", "title:string"
+          output = rails("db:prepare")
+          assert_match(/CreateRecipes: migrated/, output)
+        end
+      ensure
+        rails "db:drop" rescue nil
       end
 
       test "db:prepare does not touch schema when dumping is disabled" do

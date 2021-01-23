@@ -103,6 +103,7 @@ task default: :test
       opts = options.transform_keys(&:to_sym).except(*DUMMY_IGNORE_OPTIONS)
       opts[:force] = force
       opts[:skip_bundle] = true
+      opts[:skip_spring] = true
       opts[:skip_listen] = true
       opts[:skip_git] = true
       opts[:skip_turbolinks] = true
@@ -125,8 +126,11 @@ task default: :test
       end
     end
 
-    def test_dummy_assets
+    def test_dummy_webpacker_assets
       template "rails/javascripts.js",    "#{dummy_path}/app/javascript/packs/application.js", force: true
+    end
+
+    def test_dummy_sprocket_assets
       template "rails/stylesheets.css",   "#{dummy_path}/app/assets/stylesheets/application.css", force: true
       template "rails/dummy_manifest.js", "#{dummy_path}/app/assets/config/manifest.js", force: true
     end
@@ -290,7 +294,8 @@ task default: :test
         mute do
           build(:generate_test_dummy)
           build(:test_dummy_config)
-          build(:test_dummy_assets)
+          build(:test_dummy_webpacker_assets)
+          build(:test_dummy_sprocket_assets) unless options[:skip_sprockets]
           build(:test_dummy_clean)
           # ensure that bin/rails has proper dummy_path
           build(:bin, true)

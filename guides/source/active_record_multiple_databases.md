@@ -113,14 +113,21 @@ class AnimalsRecord < ApplicationRecord
 end
 ```
 
- Then we need to
-update `ApplicationRecord` to be aware of our new replica.
+Then we need to update `ApplicationRecord` to be aware of our new replica.
 
 ```ruby
 class ApplicationRecord < ActiveRecord::Base
   self.abstract_class = true
 
   connects_to database: { writing: :primary, reading: :primary_replica }
+end
+```
+
+Classes that connect to primary/primary_replica can inherit from `ApplicationRecord` like
+standard Rails applications:
+
+```ruby
+class Person < ApplicationRecord
 end
 ```
 
@@ -174,7 +181,7 @@ Note that there is no command for creating the users and you'll need to do that 
 to support the readonly users for your replicas. If you want to create just the animals
 database you can run `bin/rails db:create:animals`.
 
-## Generators & Migrations
+## Generators and Migrations
 
 Migrations for multiple databases should live in their own folders prefixed with the
 name of the database key in the configuration.
@@ -304,8 +311,7 @@ that were connected via `connects_to` with the role name of `reading`.
 Note that `connected_to` with a role will look up an existing connection and switch
 using the connection specification name. This means that if you pass an unknown role
 like `connected_to(role: :nonexistent)` you will get an error that says
-`ActiveRecord::ConnectionNotEstablished (No connection pool with 'AnimalsBase' found
-for the 'nonexistent' role.)`
+`ActiveRecord::ConnectionNotEstablished (No connection pool for 'ActiveRecord::Base' found for the 'nonexistent' role.)`
 
 ## Horizontal sharding
 
@@ -349,15 +355,17 @@ class ApplicationRecord < ActiveRecord::Base
 end
 ```
 
-Then models can swap connections manually via the `connected_to` API:
+Then models can swap connections manually via the `connected_to` API. If
+using sharding both a `role` and `shard` must be passed:
 
 ```ruby
-ActiveRecord::Base.connected_to(shard: :default) do
-  @id = Record.create! # creates a record in shard one
+ActiveRecord::Base.connected_to(role: :writing, shard: :default) do
+  @id = Person.create! # Creates a record in shard default
 end
 
-ActiveRecord::Base.connected_to(shard: :shard_one) do
-  Record.find(@id) # can't find record, doesn't exist
+ActiveRecord::Base.connected_to(role: :writing, shard: :shard_one) do
+  Person.find(@id) # Can't find record, doesn't exist because it was created
+                   # in the default shard
 end
 ```
 
@@ -366,9 +374,51 @@ role and the shard with the `connected_to` API.
 
 ```ruby
 ActiveRecord::Base.connected_to(role: :reading, shard: :shard_one) do
-  Record.first # lookup record from read replica of shard one
+  Person.first # Lookup record from read replica of shard one
 end
 ```
+
+## Granular Database Connection Switching
+
+In Rails 6.1 it's possible to switch connections for one database instead of
+all databases globally. To use this feature you must first set
+`config.active_record.legacy_connection_handling` to `false` in your application
+configuration. The majority of applications should not need to make any other
+changes since the public APIs have the same behavior.
+
+With `legacy_connection_handling` set to false, any abstract connection class
+will be able to switch connections without affecting other connections. This
+is useful for switching your `AnimalsRecord` queries to read from the replica
+while ensuring your `ApplicationRecord` queries go to the primary.
+
+```ruby
+AnimalsRecord.connected_to(role: :reading) do
+  Dog.first # Reads from animals_replica
+  Person.first  # Reads from primary
+end
+```
+
+It's also possible to swap connections granularly for shards.
+
+```ruby
+AnimalsRecord.connected_to(role: :reading, shard: :shard_one) do
+  Dog.first # Will read from shard_one_replica. If no connection exists for shard_one_replica,
+  # a ConnectionNotEstablished error will be raised
+  Person.first # Will read from primary writer
+end
+```
+
+To switch only the primary database cluster use `ApplicationRecord`:
+
+```ruby
+ApplicationRecord.connected_to(role: :reading, shard: :shard_one) do
+  Person.first # Reads from primary_shard_one_replica
+  Dog.first # Reads from animals_primary
+end
+```
+
+`ActiveRecord::Base.connected_to` maintains the ability to switch
+connections globally.
 
 ## Caveats
 

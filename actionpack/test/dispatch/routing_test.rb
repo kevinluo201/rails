@@ -1459,6 +1459,18 @@ class TestRoutingMapper < ActionDispatch::IntegrationTest
     assert_equal "projects#index", @response.body
   end
 
+  def test_optional_part_of_segment
+    draw do
+      get "/star-trek(-tng)/:episode", to: "star_trek#show"
+    end
+
+    get "/star-trek/02-15-the-trouble-with-tribbles"
+    assert_equal "star_trek#show", @response.body
+
+    get "/star-trek-tng/05-02-darmok"
+    assert_equal "star_trek#show", @response.body
+  end
+
   def test_scope_with_format_option
     draw do
       get "direct/index", as: :no_format_direct, format: false
@@ -4559,9 +4571,7 @@ end
 
 class TestInvalidUrls < ActionDispatch::IntegrationTest
   class FooController < ActionController::Base
-    def self.binary_params_for?(action)
-      action == "show"
-    end
+    param_encoding :show, :id, Encoding::ASCII_8BIT
 
     def show
       render plain: "foo#show"
@@ -4595,7 +4605,7 @@ class TestInvalidUrls < ActionDispatch::IntegrationTest
     end
   end
 
-  test "params encoded with binary_params_for? are treated as ASCII 8bit" do
+  test "params param_encoding uses ASCII 8bit" do
     with_routing do |set|
       set.draw do
         get "/foo/show(/:id)", to: "test_invalid_urls/foo#show"
@@ -4607,6 +4617,21 @@ class TestInvalidUrls < ActionDispatch::IntegrationTest
 
       get "/bar/show/%E2%EF%BF%BD%A6"
       assert_response :ok
+    end
+  end
+
+  test "does not encode params besides id" do
+    with_routing do |set|
+      set.draw do
+        get "/foo/show(/:id)", to: "test_invalid_urls/foo#show"
+        get "/bar/show(/:id)", controller: "test_invalid_urls/foo", action: "show"
+      end
+
+      get "/foo/show/%E2%EF%BF%BD%A6?something_else=%E2%EF%BF%BD%A6"
+      assert_response :bad_request
+
+      get "/foo/show/%E2%EF%BF%BD%A6?something_else=%E2%EF%BF%BD%A6"
+      assert_response :bad_request
     end
   end
 end

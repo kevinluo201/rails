@@ -72,6 +72,7 @@ class Developer < ActiveRecord::Base
                           class_name: "SpecialProject"
 
   has_many :audit_logs
+  has_many :required_audit_logs, class_name: "AuditLogRequired"
   has_many :strict_loading_audit_logs, -> { strict_loading }, class_name: "AuditLog"
   has_many :strict_loading_opt_audit_logs, strict_loading: true, class_name: "AuditLog"
   has_many :contracts
@@ -113,6 +114,11 @@ end
 class SubDeveloper < Developer
 end
 
+class SpecialDeveloper < ActiveRecord::Base
+  self.table_name = "developers"
+  has_many :special_contracts, foreign_key: "developer_id"
+end
+
 class SymbolIgnoredDeveloper < ActiveRecord::Base
   self.table_name = "developers"
   self.ignored_columns = [:first_name, :last_name]
@@ -123,6 +129,11 @@ end
 class AuditLog < ActiveRecord::Base
   belongs_to :developer, validate: true
   belongs_to :unvalidated_developer, class_name: "Developer"
+end
+
+class AuditLogRequired < ActiveRecord::Base
+  self.table_name = "audit_logs"
+  belongs_to :developer, required: true
 end
 
 class DeveloperWithBeforeDestroyRaise < ActiveRecord::Base
@@ -138,6 +149,16 @@ end
 class DeveloperWithSelect < ActiveRecord::Base
   self.table_name = "developers"
   default_scope { select("name") }
+end
+
+class DeveloperwithDefaultMentorScopeNot < ActiveRecord::Base
+  self.table_name = "developers"
+  default_scope -> { where(mentor_id: 1) }
+end
+
+class DeveloperWithDefaultMentorScopeAllQueries < ActiveRecord::Base
+  self.table_name = "developers"
+  default_scope -> { where(mentor_id: 1) }, all_queries: true
 end
 
 class DeveloperWithIncludes < ActiveRecord::Base

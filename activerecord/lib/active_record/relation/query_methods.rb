@@ -8,8 +8,6 @@ require "active_support/core_ext/array/wrap"
 
 module ActiveRecord
   module QueryMethods
-    extend ActiveSupport::Concern
-
     include ActiveModel::ForbiddenAttributesProtection
 
     # WhereChain objects act as placeholder for queries in which #where does not have any parameter.
@@ -39,26 +37,40 @@ module ActiveRecord
       #
       #    User.where.not(name: %w(Ko1 Nobu))
       #    # SELECT * FROM users WHERE name NOT IN ('Ko1', 'Nobu')
+      #
+      #    User.where.not(name: "Jon", role: "admin")
+      #    # SELECT * FROM users WHERE NOT (name == 'Jon' AND role == 'admin')
       def not(opts, *rest)
         where_clause = @scope.send(:build_where_clause, opts, rest)
 
-        if not_behaves_as_nor?(opts)
-          ActiveSupport::Deprecation.warn(<<~MSG.squish)
-            NOT conditions will no longer behave as NOR in Rails 6.1.
-            To continue using NOR conditions, NOT each condition individually
-            (`#{
-              opts.flat_map { |key, value|
-                if value.is_a?(Hash) && value.size > 1
-                  value.map { |k, v| ".where.not(#{key.inspect} => { #{k.inspect} => ... })" }
-                else
-                  ".where.not(#{key.inspect} => ...)"
-                end
-              }.join
-            }`).
-          MSG
-          @scope.where_clause += where_clause.invert(:nor)
-        else
-          @scope.where_clause += where_clause.invert
+        @scope.where_clause += where_clause.invert
+
+        @scope
+      end
+
+      # Returns a new relation with joins and where clause to identify
+      # associated relations.
+      #
+      # For example, posts that are associated to a related author:
+      #
+      #    Post.where.associated(:author)
+      #    # SELECT "posts".* FROM "posts"
+      #    # INNER JOIN "authors" ON "authors"."id" = "posts"."author_id"
+      #    # WHERE "authors"."id" IS NOT NULL
+      #
+      # Additionally, multiple relations can be combined. This will return posts
+      # associated to both an author and any comments:
+      #
+      #    Post.where.associated(:author, :comments)
+      #    # SELECT "posts".* FROM "posts"
+      #    # INNER JOIN "authors" ON "authors"."id" = "posts"."author_id"
+      #    # INNER JOIN "comments" ON "comments"."post_id" = "posts"."id"
+      #    # WHERE "authors"."id" IS NOT NULL AND "comments"."id" IS NOT NULL
+      def associated(*associations)
+        associations.each do |association|
+          reflection = @scope.klass._reflect_on_association(association)
+          @scope.joins!(association)
+          self.not(reflection.table_name => { reflection.association_primary_key => nil })
         end
 
         @scope
@@ -82,24 +94,15 @@ module ActiveRecord
       #    # LEFT OUTER JOIN "authors" ON "authors"."id" = "posts"."author_id"
       #    # LEFT OUTER JOIN "comments" ON "comments"."post_id" = "posts"."id"
       #    # WHERE "authors"."id" IS NULL AND "comments"."id" IS NULL
-      def missing(*args)
-        args.each do |arg|
-          reflection = @scope.klass._reflect_on_association(arg)
-          opts = { reflection.table_name => { reflection.association_primary_key => nil } }
-          @scope.left_outer_joins!(arg)
-          @scope.where!(opts)
+      def missing(*associations)
+        associations.each do |association|
+          reflection = @scope.klass._reflect_on_association(association)
+          @scope.left_outer_joins!(association)
+          @scope.where!(reflection.table_name => { reflection.association_primary_key => nil })
         end
 
         @scope
       end
-
-      private
-        def not_behaves_as_nor?(opts)
-          return false unless opts.is_a?(Hash)
-
-          opts.any? { |k, v| v.is_a?(Hash) && v.size > 1 } ||
-            opts.size > 1
-        end
     end
 
     FROZEN_EMPTY_ARRAY = [].freeze
@@ -653,13 +656,13 @@ module ActiveRecord
     #
     # If the condition is any blank-ish object, then #where is a no-op and returns
     # the current relation.
-    def where(opts = :chain, *rest)
-      if :chain == opts
+    def where(*args)
+      if args.empty?
         WhereChain.new(spawn)
-      elsif opts.blank?
+      elsif args.length == 1 && args.first.blank?
         self
       else
-        spawn.where!(opts, *rest)
+        spawn.where!(*args)
       end
     end
 
@@ -688,6 +691,32 @@ module ActiveRecord
       scope.unscope!(where: where_clause.extract_attributes)
       scope.where_clause += where_clause
       scope
+    end
+
+    # Allows you to invert an entire where clause instead of manually applying conditions.
+    #
+    #   class User
+    #     scope :active, -> { where(accepted: true, locked: false) }
+    #   end
+    #
+    #   User.where(accepted: true)
+    #   # WHERE `accepted` = 1
+    #
+    #   User.where(accepted: true).invert_where
+    #   # WHERE `accepted` != 1
+    #
+    #   User.active
+    #   # WHERE `accepted` = 1 AND `locked` = 0
+    #
+    #   User.active.invert_where
+    #   # WHERE NOT (`accepted` = 1 AND `locked` = 0)
+    def invert_where
+      spawn.invert_where!
+    end
+
+    def invert_where! # :nodoc:
+      self.where_clause = where_clause.invert
+      self
     end
 
     # Returns a new relation, which is the logical intersection of this relation and the one passed
@@ -1103,12 +1132,15 @@ module ActiveRecord
         when String, Array
           parts = [klass.sanitize_sql(rest.empty? ? opts : [opts, *rest])]
         when Hash
-          opts = opts.stringify_keys
+          opts = opts.transform_keys do |key|
+            key = key.to_s
+            klass.attribute_aliases[key] || key
+          end
           references = PredicateBuilder.references(opts)
           self.references_values |= references unless references.empty?
 
           parts = predicate_builder.build_from_hash(opts) do |table_name|
-            lookup_reflection_from_join_dependencies(table_name)
+            lookup_table_klass_from_join_dependencies(table_name)
           end
         when Arel::Nodes::Node
           parts = [opts]
@@ -1121,9 +1153,9 @@ module ActiveRecord
       alias :build_having_clause :build_where_clause
 
     private
-      def lookup_reflection_from_join_dependencies(table_name)
+      def lookup_table_klass_from_join_dependencies(table_name)
         each_join_dependencies do |join|
-          return join.reflection if table_name == join.table_name
+          return join.base_klass if table_name == join.table_name
         end
         nil
       end
@@ -1334,7 +1366,7 @@ module ActiveRecord
         elsif field.match?(/\A\w+\.\w+\z/)
           table, column = field.split(".")
           predicate_builder.resolve_arel_attribute(table, column) do
-            lookup_reflection_from_join_dependencies(table)
+            lookup_table_klass_from_join_dependencies(table)
           end
         else
           yield field
@@ -1427,9 +1459,9 @@ module ActiveRecord
             arg.map { |field, dir|
               case field
               when Arel::Nodes::SqlLiteral
-                field.send(dir.downcase)
+                field.public_send(dir.downcase)
               else
-                order_column(field.to_s).send(dir.downcase)
+                order_column(field.to_s).public_send(dir.downcase)
               end
             }
           else
@@ -1527,7 +1559,7 @@ module ActiveRecord
             v1 = v1.uniq
             v2 = v2.uniq
           end
-          v1 == v2 || (!v1 || v1.empty?) && (!v2 || v2.empty?)
+          v1 == v2
         end
       end
   end

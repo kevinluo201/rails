@@ -15,7 +15,7 @@ begin
 rescue LoadError
 end
 
-require "digest/sha2"
+require "active_support/digest"
 require "active_support/core_ext/marshal"
 
 module ActiveSupport
@@ -46,7 +46,7 @@ module ActiveSupport
     #   4.0.1+ for distributed mget support.
     # * +delete_matched+ support for Redis KEYS globs.
     class RedisCacheStore < Store
-      # Keys are truncated with their own SHA2 digest if they exceed 1kB
+      # Keys are truncated with the ActiveSupport digest if they exceed 1kB
       MAX_KEY_BYTESIZE = 1024
 
       DEFAULT_REDIS_OPTIONS = {
@@ -169,7 +169,7 @@ module ActiveSupport
       # Race condition TTL is not set by default. This can be used to avoid
       # "thundering herd" cache writes when hot cache entries are expired.
       # See <tt>ActiveSupport::Cache::Store#fetch</tt> for more.
-      def initialize(namespace: nil, compress: true, compress_threshold: 1.kilobyte, expires_in: nil, race_condition_ttl: nil, error_handler: DEFAULT_ERROR_HANDLER, **redis_options)
+      def initialize(namespace: nil, compress: true, compress_threshold: 1.kilobyte, coder: DEFAULT_CODER, expires_in: nil, race_condition_ttl: nil, error_handler: DEFAULT_ERROR_HANDLER, **redis_options)
         @redis_options = redis_options
 
         @max_key_bytesize = MAX_KEY_BYTESIZE
@@ -177,7 +177,8 @@ module ActiveSupport
 
         super namespace: namespace,
           compress: compress, compress_threshold: compress_threshold,
-          expires_in: expires_in, race_condition_ttl: race_condition_ttl
+          expires_in: expires_in, race_condition_ttl: race_condition_ttl,
+          coder: coder
       end
 
       def redis
@@ -318,6 +319,11 @@ module ActiveSupport
         end
       end
 
+      # Get info from redis servers.
+      def stats
+        redis.with { |c| c.info }
+      end
+
       def mget_capable? #:nodoc:
         set_redis_capabilities unless defined? @mget_capable
         @mget_capable
@@ -443,7 +449,7 @@ module ActiveSupport
 
         def truncate_key(key)
           if key && key.bytesize > max_key_bytesize
-            suffix = ":sha2:#{::Digest::SHA2.hexdigest(key)}"
+            suffix = ":hash:#{ActiveSupport::Digest.hexdigest(key)}"
             truncate_at = max_key_bytesize - suffix.bytesize
             "#{key.byteslice(0, truncate_at)}#{suffix}"
           else
@@ -451,13 +457,11 @@ module ActiveSupport
           end
         end
 
-        def deserialize_entry(serialized_entry, raw:)
-          if serialized_entry
-            if raw
-              Entry.new(serialized_entry, compress: false)
-            else
-              Marshal.load(serialized_entry)
-            end
+        def deserialize_entry(payload, raw:)
+          if payload && raw
+            Entry.new(payload, compress: false)
+          else
+            super(payload)
           end
         end
 
@@ -465,7 +469,7 @@ module ActiveSupport
           if raw
             entry.value.to_s
           else
-            Marshal.dump(entry)
+            super(entry)
           end
         end
 

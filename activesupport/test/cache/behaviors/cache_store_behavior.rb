@@ -218,10 +218,6 @@ module CacheStoreBehavior
     assert_compressed(SMALL_OBJECT, compress: true, compress_threshold: 1)
   end
 
-  def test_large_string_with_default_compression_settings
-    assert_compressed(LARGE_STRING)
-  end
-
   def test_large_string_with_compress_true
     assert_compressed(LARGE_STRING, compress: true)
   end
@@ -232,10 +228,6 @@ module CacheStoreBehavior
 
   def test_large_string_with_high_compress_threshold
     assert_uncompressed(LARGE_STRING, compress: true, compress_threshold: 1.megabyte)
-  end
-
-  def test_large_object_with_default_compression_settings
-    assert_compressed(LARGE_OBJECT)
   end
 
   def test_large_object_with_compress_true
@@ -410,6 +402,40 @@ module CacheStoreBehavior
     end
 
     Time.stub(:now, time + 61) do
+      assert_nil @cache.read("foo")
+    end
+  end
+
+  def test_expire_in_is_alias_for_expires_in
+    time = Time.local(2008, 4, 24)
+
+    Time.stub(:now, time) do
+      @cache.write("foo", "bar", expire_in: 20)
+      assert_equal "bar", @cache.read("foo")
+    end
+
+    Time.stub(:now, time + 10) do
+      assert_equal "bar", @cache.read("foo")
+    end
+
+    Time.stub(:now, time + 21) do
+      assert_nil @cache.read("foo")
+    end
+  end
+
+  def test_expired_in_is_alias_for_expires_in
+    time = Time.local(2008, 4, 24)
+
+    Time.stub(:now, time) do
+      @cache.write("foo", "bar", expired_in: 20)
+      assert_equal "bar", @cache.read("foo")
+    end
+
+    Time.stub(:now, time + 10) do
+      assert_equal "bar", @cache.read("foo")
+    end
+
+    Time.stub(:now, time + 21) do
       assert_nil @cache.read("foo")
     end
   end

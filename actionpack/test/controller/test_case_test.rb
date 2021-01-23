@@ -247,7 +247,6 @@ XML
     assert_equal JSON.parse(@response.body)["foo"], "bar"
   end
 
-
   def test_body_stream
     params = Hash[:page, { name: "page name" }, "some key", 123]
 
@@ -957,6 +956,19 @@ XML
       assert_deprecated(expected) do
         uploaded_file = fixture_file_upload("multipart/ruby_on_rails.jpg", "image/jpg")
         assert_equal File.open("#{FILES_DIR}/ruby_on_rails.jpg", READ_PLAIN).read, uploaded_file.read
+      end
+    end
+  end
+
+  def test_fixture_file_upload_relative_to_fixture_path_with_relative_file_fixture_path
+    TestCaseTest.stub :fixture_path, File.expand_path("../fixtures", __dir__) do
+      TestCaseTest.stub :file_fixture_path, "test/fixtures/multipart" do
+        expected = "`fixture_file_upload(\"multipart/ruby_on_rails.jpg\")` to `fixture_file_upload(\"ruby_on_rails.jpg\")`"
+
+        assert_deprecated(expected) do
+          uploaded_file = fixture_file_upload("multipart/ruby_on_rails.jpg", "image/jpg")
+          assert_equal File.open("#{FILES_DIR}/ruby_on_rails.jpg", READ_PLAIN).read, uploaded_file.read
+        end
       end
     end
   end

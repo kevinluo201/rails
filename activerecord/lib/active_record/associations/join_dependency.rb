@@ -84,7 +84,7 @@ module ActiveRecord
         @references = {}
 
         references.each do |table_name|
-          @references[table_name.to_sym] = table_name if table_name.is_a?(String)
+          @references[table_name.to_sym] = table_name if table_name.is_a?(Arel::Nodes::SqlLiteral)
         end unless references.empty?
 
         joins = make_join_constraints(join_root, join_type)
@@ -195,7 +195,7 @@ module ActiveRecord
               next table, true
             end
 
-            table_name = @references[reflection.name.to_sym]
+            table_name = @references[reflection.name.to_sym]&.to_s
 
             table = alias_tracker.aliased_table_for(reflection.klass.arel_table, table_name) do
               name = reflection.alias_candidate(parent.table_name)

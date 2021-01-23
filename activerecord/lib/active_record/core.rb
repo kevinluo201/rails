@@ -27,6 +27,18 @@ module ActiveRecord
       mattr_accessor :verbose_query_logs, instance_writer: false, default: false
 
       ##
+      # :singleton-method:
+      #
+      # Specifies the names of the queues used by background jobs.
+      mattr_accessor :queues, instance_accessor: false, default: {}
+
+      ##
+      # :singleton-method:
+      #
+      # Specifies the job used to destroy associations in the background
+      class_attribute :destroy_association_async_job, instance_writer: false, instance_predicate: false, default: false
+
+      ##
       # Contains the database configuration - as is typically stored in config/database.yml -
       # as an ActiveRecord::DatabaseConfigurations object.
       #
@@ -81,14 +93,6 @@ module ActiveRecord
       # scope being ignored is error-worthy, rather than a warning.
       mattr_accessor :error_on_ignored_order, instance_writer: false, default: false
 
-      # :singleton-method:
-      # Specify the behavior for unsafe raw query methods. Values are as follows
-      #   deprecated - Warnings are logged when unsafe raw SQL is passed to
-      #                query methods.
-      #   disabled   - Unsafe raw SQL passed to query methods results in
-      #                UnknownAttributeReference exception.
-      mattr_accessor :allow_unsafe_raw_sql, instance_writer: false, default: :deprecated
-
       ##
       # :singleton-method:
       # Specify whether or not to use timestamps for migration versions
@@ -119,13 +123,23 @@ module ActiveRecord
       # potentially cause memory bloat.
       mattr_accessor :warn_on_records_fetched_greater_than, instance_writer: false
 
+      ##
+      # :singleton-method:
+      # Show a warning when Rails couldn't parse your database.yml
+      # for multiple databases.
+      mattr_accessor :suppress_multiple_database_warning, instance_writer: false, default: false
+
       mattr_accessor :maintain_test_schema, instance_accessor: false
 
       class_attribute :belongs_to_required_by_default, instance_accessor: false
 
-      class_attribute :strict_loading_by_default, instance_accessor: false, default: false
+      ##
+      # :singleton-method:
+      # Set the application to log or raise when an association violates strict loading.
+      # Defaults to :raise.
+      mattr_accessor :action_on_strict_loading_violation, instance_accessor: false, default: :raise
 
-      mattr_accessor :connection_handlers, instance_accessor: false, default: {}
+      class_attribute :strict_loading_by_default, instance_accessor: false, default: false
 
       mattr_accessor :writing_role, instance_accessor: false, default: :writing
 
@@ -135,7 +149,11 @@ module ActiveRecord
 
       class_attribute :default_connection_handler, instance_writer: false
 
+      class_attribute :default_role, instance_writer: false
+
       class_attribute :default_shard, instance_writer: false
+
+      mattr_accessor :legacy_connection_handling, instance_writer: false, default: true
 
       self.filter_attributes = []
 
@@ -147,16 +165,140 @@ module ActiveRecord
         Thread.current.thread_variable_set(:ar_connection_handler, handler)
       end
 
-      def self.current_shard
-        Thread.current.thread_variable_get(:ar_shard) || default_shard
+      def self.connection_handlers
+        unless legacy_connection_handling
+          raise NotImplementedError, "The new connection handling does not support accessing multiple connection handlers."
+        end
+
+        @@connection_handlers ||= {}
       end
 
-      def self.current_shard=(shard)
-        Thread.current.thread_variable_set(:ar_shard, shard)
+      def self.connection_handlers=(handlers)
+        unless legacy_connection_handling
+          raise NotImplementedError, "The new connection handling does not setting support multiple connection handlers."
+        end
+
+        @@connection_handlers = handlers
+      end
+
+      # Returns the symbol representing the current connected role.
+      #
+      #   ActiveRecord::Base.connected_to(role: :writing) do
+      #     ActiveRecord::Base.current_role #=> :writing
+      #   end
+      #
+      #   ActiveRecord::Base.connected_to(role: :reading) do
+      #     ActiveRecord::Base.current_role #=> :reading
+      #   end
+      def self.current_role
+        if ActiveRecord::Base.legacy_connection_handling
+          connection_handlers.key(connection_handler) || default_role
+        else
+          connected_to_stack.reverse_each do |hash|
+            return hash[:role] if hash[:role] && hash[:klasses].include?(Base)
+            return hash[:role] if hash[:role] && hash[:klasses].include?(connection_classes)
+          end
+
+          default_role
+        end
+      end
+
+      # Returns the symbol representing the current connected shard.
+      #
+      #   ActiveRecord::Base.connected_to(role: :reading) do
+      #     ActiveRecord::Base.current_shard #=> :default
+      #   end
+      #
+      #   ActiveRecord::Base.connected_to(role: :writing, shard: :one) do
+      #     ActiveRecord::Base.current_shard #=> :one
+      #   end
+      def self.current_shard
+        connected_to_stack.reverse_each do |hash|
+          return hash[:shard] if hash[:shard] && hash[:klasses].include?(Base)
+          return hash[:shard] if hash[:shard] && hash[:klasses].include?(connection_classes)
+        end
+
+        default_shard
+      end
+
+      # Returns the symbol representing the current setting for
+      # preventing writes.
+      #
+      #   ActiveRecord::Base.connected_to(role: :reading) do
+      #     ActiveRecord::Base.current_preventing_writes #=> true
+      #   end
+      #
+      #   ActiveRecord::Base.connected_to(role: :writing) do
+      #     ActiveRecord::Base.current_preventing_writes #=> false
+      #   end
+      def self.current_preventing_writes
+        if legacy_connection_handling
+          connection_handler.prevent_writes
+        else
+          connected_to_stack.reverse_each do |hash|
+            return hash[:prevent_writes] if !hash[:prevent_writes].nil? && hash[:klasses].include?(Base)
+            return hash[:prevent_writes] if !hash[:prevent_writes].nil? && hash[:klasses].include?(connection_classes)
+          end
+
+          false
+        end
+      end
+
+      def self.connected_to_stack # :nodoc:
+        if connected_to_stack = Thread.current.thread_variable_get(:ar_connected_to_stack)
+          connected_to_stack
+        else
+          connected_to_stack = Concurrent::Array.new
+          Thread.current.thread_variable_set(:ar_connected_to_stack, connected_to_stack)
+          connected_to_stack
+        end
+      end
+
+      def self.connection_class=(b) # :nodoc:
+        @connection_class = b
+      end
+
+      def self.connection_class # :nodoc
+        @connection_class ||= false
+      end
+
+      def self.connection_class? # :nodoc:
+        self.connection_class
+      end
+
+      def self.connection_classes # :nodoc:
+        klass = self
+
+        until klass == Base
+          break if klass.connection_class?
+          klass = klass.superclass
+        end
+
+        klass
+      end
+
+      def self.allow_unsafe_raw_sql # :nodoc:
+        ActiveSupport::Deprecation.warn("ActiveRecord::Base.allow_unsafe_raw_sql is deprecated and will be removed in Rails 6.2")
+      end
+
+      def self.allow_unsafe_raw_sql=(value) # :nodoc:
+        ActiveSupport::Deprecation.warn("ActiveRecord::Base.allow_unsafe_raw_sql= is deprecated and will be removed in Rails 6.2")
       end
 
       self.default_connection_handler = ConnectionAdapters::ConnectionHandler.new
+      self.default_role = writing_role
       self.default_shard = :default
+
+      def self.strict_loading_violation!(owner:, reflection:) # :nodoc:
+        case action_on_strict_loading_violation
+        when :raise
+          message = "`#{owner}` is marked for strict_loading. The `#{reflection.klass}` association named `:#{reflection.name}` cannot be lazily loaded."
+          raise ActiveRecord::StrictLoadingViolationError.new(message)
+        when :log
+          name = "strict_loading_violation.active_record"
+          ActiveSupport::Notifications.instrument(name, owner: owner, reflection: reflection)
+        end
+      end
     end
 
     module ClassMethods
@@ -202,31 +344,37 @@ module ActiveRecord
         hash = args.first
         return super unless Hash === hash
 
-        values = hash.values.map! { |value| value.is_a?(Base) ? value.id : value }
-        return super if values.any? { |v| StatementCache.unsupported_value?(v) }
+        hash = hash.each_with_object({}) do |(key, value), h|
+          key = key.to_s
+          key = attribute_aliases[key] || key
 
-        keys = hash.keys.map! do |key|
-          attribute_aliases[name = key.to_s] || begin
-            reflection = _reflect_on_association(name)
-            if reflection&.belongs_to? && !reflection.polymorphic?
-              reflection.join_foreign_key
-            elsif reflect_on_aggregation(name)
-              return super
-            else
-              name
-            end
+          return super if reflect_on_aggregation(key)
+
+          reflection = _reflect_on_association(key)
+
+          if !reflection
+            value = value.id if value.respond_to?(:id)
+          elsif reflection.belongs_to? && !reflection.polymorphic?
+            key = reflection.join_foreign_key
+            pkey = reflection.join_primary_key
+            value = value.public_send(pkey) if value.respond_to?(pkey)
           end
+
+          if !columns_hash.key?(key) || StatementCache.unsupported_value?(value)
+            return super
+          end
+
+          h[key] = value
         end
 
-        return super unless keys.all? { |k| columns_hash.key?(k) }
-
+        keys = hash.keys
         statement = cached_find_by_statement(keys) { |params|
           wheres = keys.index_with { params.bind }
           where(wheres).limit(1)
         }
 
         begin
-          statement.execute(values, connection).first
+          statement.execute(hash.values, connection).first
         rescue TypeError
           raise ActiveRecord::StatementInvalid
         end
@@ -303,10 +451,6 @@ module ActiveRecord
 
       def type_caster # :nodoc:
         TypeCaster::Map.new(self)
-      end
-
-      def _internal? # :nodoc:
-        false
       end
 
       def cached_find_by_statement(key, &block) # :nodoc:
@@ -522,8 +666,8 @@ module ActiveRecord
     #   user.strict_loading!
     #   user.comments.to_a
     #   => ActiveRecord::StrictLoadingViolationError
-    def strict_loading!
-      @strict_loading = true
+    def strict_loading!(value = true)
+      @strict_loading = value
     end
 
     # Marks this record as read only.
@@ -542,14 +686,7 @@ module ActiveRecord
       inspection = if defined?(@attributes) && @attributes
         self.class.attribute_names.collect do |name|
           if _has_attribute?(name)
-            attr = _read_attribute(name)
-            value = if attr.nil?
-              attr.inspect
-            else
-              attr = format_for_inspect(attr)
-              inspection_filter.filter_param(name, attr)
-            end
-            "#{name}: #{value}"
+            "#{name}: #{attribute_for_inspect(name)}"
           end
         end.compact.join(", ")
       else
@@ -586,7 +723,12 @@ module ActiveRecord
 
     # Returns a hash of the given methods with their names as keys and returned values as values.
     def slice(*methods)
-      Hash[methods.flatten.map! { |method| [method, public_send(method)] }].with_indifferent_access
+      methods.flatten.index_with { |method| public_send(method) }.with_indifferent_access
+    end
+
+    # Returns an array of the values returned by the given methods.
+    def values_at(*methods)
+      methods.flatten.map! { |method| public_send(method) }
     end
 
     private

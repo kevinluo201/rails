@@ -144,14 +144,25 @@ module ActiveRecord
     end
 
     def initialize(message = nil)
-      if !message && defined?(Rails.env)
-        super("Migrations are pending. To resolve this issue, run:\n\n        bin/rails db:migrate RAILS_ENV=#{::Rails.env}")
-      elsif !message
-        super("Migrations are pending. To resolve this issue, run:\n\n        bin/rails db:migrate")
-      else
-        super
-      end
+      super(message || detailed_migration_message)
     end
+
+    private
+      def detailed_migration_message
+        message = "Migrations are pending. To resolve this issue, run:\n\n        bin/rails db:migrate"
+        message += " RAILS_ENV=#{::Rails.env}" if defined?(Rails.env)
+        message += "\n\n"
+
+        pending_migrations = ActiveRecord::Base.connection.migration_context.open.pending_migrations
+
+        message += "You have #{pending_migrations.size} pending #{pending_migrations.size > 1 ? 'migrations:' : 'migration:'}\n\n"
+
+        pending_migrations.each do |pending_migration|
+          message += "#{pending_migration.basename}\n"
+        end
+
+        message
+      end
   end
 
   class ConcurrentMigrationError < MigrationError #:nodoc:
@@ -545,10 +556,12 @@ module ActiveRecord
     def self.inherited(subclass) #:nodoc:
       super
       if subclass.superclass == Migration
+        major = ActiveRecord::VERSION::MAJOR
+        minor = ActiveRecord::VERSION::MINOR
         raise StandardError, "Directly inheriting from ActiveRecord::Migration is not supported. " \
-          "Please specify the Rails release the migration was written for:\n" \
+          "Please specify the Active Record release the migration was written for:\n" \
           "\n" \
-          "  class #{subclass} < ActiveRecord::Migration[4.2]"
+          "  class #{subclass} < ActiveRecord::Migration[#{major}.#{minor}]"
       end
     end
 
@@ -856,7 +869,7 @@ module ActiveRecord
           change
         end
       else
-        send(direction)
+        public_send(direction)
       end
     ensure
       @connection = nil
@@ -1189,7 +1202,7 @@ module ActiveRecord
 
         finish = migrator.migrations[start_index + steps]
         version = finish ? finish.version : 0
-        send(direction, version)
+        public_send(direction, version)
       end
   end
 

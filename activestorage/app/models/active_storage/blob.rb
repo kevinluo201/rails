@@ -14,7 +14,7 @@
 # Blobs are intended to be immutable in as-so-far as their reference to a specific file goes. You're allowed to
 # update a blob's metadata on a subsequent pass, but you should not update the key or change the uploaded file.
 # If you need to create a derivative or otherwise change the blob, simply create a new blob and purge the old one.
-class ActiveStorage::Blob < ActiveRecord::Base
+class ActiveStorage::Blob < ActiveStorage::Record
   # We use constant paths in the following include calls to avoid a gotcha of
   # classic mode: If the parent application defines a top-level Analyzable, for
   # example, and ActiveStorage::Blob::Analyzable is not yet loaded, a bare
@@ -74,8 +74,8 @@ class ActiveStorage::Blob < ActiveRecord::Base
     # that was created ahead of the upload itself on form submission.
     #
     # The signed ID is also used to create stable URLs for the blob through the BlobsController.
-    def find_signed!(id, record: nil)
-      super(id, purpose: :blob_id)
+    def find_signed!(id, record: nil, purpose: :blob_id)
+      super(id, purpose: purpose)
     end
 
     def build_after_upload(io:, filename:, content_type: nil, metadata: nil, service_name: nil, identify: true, record: nil) #:nodoc:
@@ -143,8 +143,8 @@ class ActiveStorage::Blob < ActiveRecord::Base
   end
 
   # Returns a signed ID for this blob that's suitable for reference on the client-side without fear of tampering.
-  def signed_id
-    super(purpose: :blob_id)
+  def signed_id(purpose: :blob_id)
+    super
   end
 
   # Returns the key pointing to the file on the service that's associated with this blob. The key is the
@@ -322,6 +322,10 @@ class ActiveStorage::Blob < ActiveRecord::Base
 
     def allowed_inline?
       ActiveStorage.content_types_allowed_inline.include?(content_type)
+    end
+
+    def web_image?
+      ActiveStorage.web_image_content_types.include?(content_type)
     end
 
     def service_metadata

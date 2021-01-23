@@ -76,16 +76,6 @@ module ActiveRecord
         json:         { name: "json" },
       }
 
-      def self.represent_boolean_as_integer=(value) # :nodoc:
-        if value == false
-          raise "`.represent_boolean_as_integer=` is now always true, so make sure your application can work with it and remove this settings."
-        end
-
-        ActiveSupport::Deprecation.warn(
-          "`.represent_boolean_as_integer=` is now always true, so setting this is deprecated and will be removed in Rails 6.1."
-        )
-      end
-
       class StatementPool < ConnectionAdapters::StatementPool # :nodoc:
         private
           def dealloc(stmt)
@@ -492,7 +482,7 @@ module ActiveRecord
           end
         end
 
-        COLLATE_REGEX = /.*\"(\w+)\".*collate\s+\"(\w+)\".*/i.freeze
+        COLLATE_REGEX = /.*"(\w+)".*collate\s+"(\w+)".*/i.freeze
 
         def table_structure_with_collation(table_name, basic_structure)
           collation_hash = {}

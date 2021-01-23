@@ -14,7 +14,7 @@ After reading this guide, you will know:
 * How to build features for the engine.
 * How to hook the engine into an application.
 * How to override engine functionality in the application.
-* Avoid loading Rails frameworks with Load and Configuration Hooks
+* How to avoid loading Rails frameworks with Load and Configuration Hooks.
 
 --------------------------------------------------------------------------------
 
@@ -244,13 +244,13 @@ not your engine's application controller. Ruby is able to resolve the `Applicati
 The best way to prevent this from happening is to use `require_dependency` to ensure that the engine's application
 controller is loaded. For example:
 
-``` ruby
+```ruby
 # app/controllers/blorgh/articles_controller.rb:
 require_dependency "blorgh/application_controller"
 
 module Blorgh
   class ArticlesController < ApplicationController
-    ...
+    # ...
   end
 end
 ```
@@ -405,7 +405,7 @@ class is defined within the `Blorgh` module:
 ```ruby
 module Blorgh
   class ArticlesController < ApplicationController
-    ...
+    # ...
   end
 end
 ```
@@ -418,7 +418,7 @@ The helper inside `app/helpers/blorgh/articles_helper.rb` is also namespaced:
 ```ruby
 module Blorgh
   module ArticlesHelper
-    ...
+    # ...
   end
 end
 ```
@@ -439,8 +439,8 @@ If you'd rather play around in the console, `bin/rails console` will also work j
 like a Rails application. Remember: the `Article` model is namespaced, so to
 reference it you must call it as `Blorgh::Article`.
 
-```ruby
->> Blorgh::Article.find(1)
+```irb
+irb> Blorgh::Article.find(1)
 => #<Blorgh::Article id: 1 ...>
 ```
 
@@ -538,7 +538,7 @@ directory at `app/views/blorgh/comments` and in it a new file called
 
 ```html+erb
 <h3>New comment</h3>
-<%= form_with model: [@article, @article.comments.build], local: true do |form| %>
+<%= form_with model: [@article, @article.comments.build] do |form| %>
   <p>
     <%= form.label :text %><br>
     <%= form.text_area :text %>
@@ -1042,7 +1042,7 @@ module Blorgh
 
     def test_index
       get foos_url
-      ...
+      # ...
     end
   end
 end
@@ -1064,7 +1064,7 @@ module Blorgh
 
     def test_index
       get foos_url
-      ...
+      # ...
     end
   end
 end
@@ -1095,7 +1095,7 @@ In `zeitwerk` mode you'd do this:
 # config/application.rb
 module MyApp
   class Application < Rails::Application
-    ...
+    # ...
 
     overrides = "#{Rails.root}/app/overrides"
     Rails.autoloaders.main.ignore(overrides)
@@ -1114,7 +1114,7 @@ and in `classic` mode this:
 # config/application.rb
 module MyApp
   class Application < Rails::Application
-    ...
+    # ...
 
     config.to_prepare do
       Dir.glob("#{Rails.root}/app/overrides/**/*_override.rb").each do |override|
@@ -1341,13 +1341,13 @@ Pipeline require statements in processed files:
 ```css
 /*
  *= require blorgh/style
-*/
+ */
 ```
 
 INFO. Remember that in order to use languages like Sass or CoffeeScript, you
 should add the relevant library to your engine's `.gemspec`.
 
-### Separate Assets & Precompiling
+### Separate Assets and Precompiling
 
 There are some situations where your engine's assets are not required by the
 host application. For example, say that you've created an admin functionality
@@ -1512,10 +1512,12 @@ These are the load hooks you can use in your own code. To hook into the initiali
 | `ActionDispatch::SystemTestCase`     | `action_dispatch_system_test_case`   |
 | `ActionMailbox::Base`                | `action_mailbox`                     |
 | `ActionMailbox::InboundEmail`        | `action_mailbox_inbound_email`       |
+| `ActionMailbox::Record`              | `action_mailbox_record`              |
 | `ActionMailbox::TestCase`            | `action_mailbox_test_case`           |
 | `ActionMailer::Base`                 | `action_mailer`                      |
 | `ActionMailer::TestCase`             | `action_mailer_test_case`            |
 | `ActionText::Content`                | `action_text_content`                |
+| `ActionText::Record`                 | `action_text_record`                 |
 | `ActionText::RichText`               | `action_text_rich_text`              |
 | `ActionView::Base`                   | `action_view`                        |
 | `ActionView::TestCase`               | `action_view_test_case`              |
@@ -1524,6 +1526,7 @@ These are the load hooks you can use in your own code. To hook into the initiali
 | `ActiveRecord::Base`                 | `active_record`                      |
 | `ActiveStorage::Attachment`          | `active_storage_attachment`          |
 | `ActiveStorage::Blob`                | `active_storage_blob`                |
+| `ActiveStorage::Record`              | `active_storage_record`              |
 | `ActiveSupport::TestCase`            | `active_support_test_case`           |
 | `i18n`                               | `i18n`                               |
 

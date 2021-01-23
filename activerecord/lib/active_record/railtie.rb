@@ -31,8 +31,7 @@ module ActiveRecord
     config.active_record.maintain_test_schema = true
     config.active_record.has_many_inversing = false
 
-    config.active_record.sqlite3 = ActiveSupport::OrderedOptions.new
-    config.active_record.sqlite3.represent_boolean_as_integer = nil
+    config.active_record.queues = ActiveSupport::InheritableOptions.new
 
     config.eager_load_namespaces << ActiveRecord
 
@@ -144,7 +143,7 @@ To keep using the current cache store, you can turn off cache versioning entirel
               current_version = begin
                 ActiveRecord::Migrator.current_version
               rescue ActiveRecordError => error
-                warn "Failed to load the schema cache because of #{error.class}: #{error.message}"
+                warn "Failed to validate the schema cache because of #{error.class}: #{error.message}"
                 nil
               end
               next if current_version.nil?
@@ -155,7 +154,7 @@ To keep using the current cache store, you can turn off cache versioning entirel
               end
             end
 
-            connection_pool.set_schema_cache(cache.dup)
+            connection_pool.set_schema_cache(cache)
           end
         end
       end
@@ -165,16 +164,25 @@ To keep using the current cache store, you can turn off cache versioning entirel
       config.after_initialize do
         ActiveSupport.on_load(:active_record) do
           if app.config.eager_load
-            descendants.each do |model|
-              # SchemaMigration and InternalMetadata both override `table_exists?`
-              # to bypass the schema cache, so skip them to avoid the extra queries.
-              next if model._internal?
+            begin
+              descendants.each do |model|
+                # If the schema cache was loaded from a dump, we can use it without connecting
+                schema_cache = model.connection_pool.schema_cache
 
-              # If there's no connection yet, or the schema cache doesn't have the columns
-              # hash for the model cached, `define_attribute_methods` would trigger a query.
-              next unless model.connected? && model.connection.schema_cache.columns_hash?(model.table_name)
+                # If there's no connection yet, we avoid connecting.
+                schema_cache ||= model.connected? && model.connection.schema_cache
 
-              model.define_attribute_methods
+                # If the schema cache doesn't have the columns
+                # hash for the model cached, `define_attribute_methods` would trigger a query.
+                if schema_cache && schema_cache.columns_hash?(model.table_name)
+                  model.define_attribute_methods
+                end
+              end
+            rescue ActiveRecordError => error
+              # Regardless of whether there was already a connection or not, we rescue any database
+              # error because it is critical that the application can boot even if the database
+              # is unhealthy.
+              warn "Failed to define attribute methods because of #{error.class}: #{error.message}"
             end
           end
         end
@@ -193,16 +201,6 @@ To keep using the current cache store, you can turn off cache versioning entirel
       ActiveSupport.on_load(:active_record) do
         configs = app.config.active_record
 
-        represent_boolean_as_integer = configs.sqlite3.delete(:represent_boolean_as_integer)
-
-        unless represent_boolean_as_integer.nil?
-          ActiveSupport.on_load(:active_record_sqlite3adapter) do
-            ActiveRecord::ConnectionAdapters::SQLite3Adapter.represent_boolean_as_integer = represent_boolean_as_integer
-          end
-        end
-
-        configs.delete(:sqlite3)
-
         configs.each do |k, v|
           send "#{k}=", v
         end
@@ -213,7 +211,9 @@ To keep using the current cache store, you can turn off cache versioning entirel
     # and then establishes the connection.
     initializer "active_record.initialize_database" do
       ActiveSupport.on_load(:active_record) do
-        self.connection_handlers = { writing_role => ActiveRecord::Base.default_connection_handler }
+        if ActiveRecord::Base.legacy_connection_handling
+          self.connection_handlers = { writing_role => ActiveRecord::Base.default_connection_handler }
+        end
         self.configurations = Rails.application.config.database_configuration
         establish_connection
       end
